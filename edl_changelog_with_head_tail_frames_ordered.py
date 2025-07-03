@@ -1,153 +1,152 @@
-# created by Sebastian Riezler with ChatGpt
+# created by Sebastian Riezler
 # c 2025
 
 import streamlit as st
 import pandas as pd
 import re
 
+st.title("🎬 EDL Comparison – Source IN/OUT + LOC + Duration")
+
+fps = st.selectbox("📽️ Frame Rate", [24, 25, 30], index=1)
+
+def tc_to_frames(tc):
+    h, m, s, f = map(int, tc.split(":"))
+    return (h * 3600 + m * 60 + s) * fps + f
+
+def extract_loc_tag(line):
+    match = re.search(r"(\w{3}_\d{3}_\d{4})", line[-20:])
+    return match.group(1) if match else ""
+
 def parse_edl(lines):
-    events = {}
+    events = []
     i = 0
     while i < len(lines):
-        match = re.match(r"^(\d{6})\s+(.+?)\s+V\s+C\s+(\d{2}:\d{2}:\d{2}:\d{2})\s+(\d{2}:\d{2}:\d{2}:\d{2})\s+(\d{2}:\d{2}:\d{2}:\d{2})\s+(\d{2}:\d{2}:\d{2}:\d{2})", lines[i])
+        match = re.match(r"^(\d{6})\s+(\S+)\s+V\s+C\s+(\d{2}:\d{2}:\d{2}:\d{2})\s+(\d{2}:\d{2}:\d{2}:\d{2})\s+(\d{2}:\d{2}:\d{2}:\d{2})\s+(\d{2}:\d{2}:\d{2}:\d{2})", lines[i])
         if match:
             event_id = match.group(1)
-            clip_name = match.group(2)
+            tape_name = match.group(2)
             src_in = match.group(3)
             src_out = match.group(4)
             rec_in = match.group(5)
-            rec_out = match.group(6)
-            from_clip = lines[i+1].strip().replace("*FROM CLIP NAME: ", "") if i+1 < len(lines) else ""
-            
-            # Sammle alle folgenden *-Zeilen
+            from_clip = ""
             locs = []
             j = i + 1
             while j < len(lines) and lines[j].startswith("*"):
-                if lines[j].startswith("*LOC"):
-                    locs.append(lines[j].strip().replace("*LOC: ", ""))
+                if lines[j].startswith("*FROM CLIP NAME:"):
+                    from_clip = lines[j].replace("*FROM CLIP NAME:", "").strip()
+                if lines[j].startswith("*LOC:"):
+                    tag = extract_loc_tag(lines[j])
+                    if tag:
+                        locs.append(tag)
                 j += 1
-
-            events[rec_in] = {
+            events.append({
                 "event_id": event_id,
-                "clip_name": clip_name,
+                "clip_name": from_clip,
+                "tape_name": tape_name,
                 "src_in": src_in,
                 "src_out": src_out,
                 "rec_in": rec_in,
-                "rec_out": rec_out,
-                "from_clip": from_clip,
                 "locs": locs
-            }
-            i += 2
+            })
+            i = j
         else:
             i += 1
     return events
 
-def tc_to_frames(tc):
-    h, m, s, f = map(int, tc.split(":"))
-    return (h * 3600 + m * 60 + s) * 25 + f
+edl_old = st.file_uploader("📂 Upload OLD EDL", type=["edl"])
+edl_new = st.file_uploader("📂 Upload NEW EDL", type=["edl"])
 
-def duration_in_frames(tc_in, tc_out):
-    return tc_to_frames(tc_out) - tc_to_frames(tc_in)
+if edl_old and edl_new:
+    edl_old_lines = edl_old.read().decode("utf-8", errors="ignore").splitlines()
+    edl_new_lines = edl_new.read().decode("utf-8", errors="ignore").splitlines()
 
-def head_tail_change(old_in, old_out, new_in, new_out):
-    head = tail = ""
-    head_diff = tail_diff = 0
-    if old_in and new_in:
-        old = tc_to_frames(old_in)
-        new = tc_to_frames(new_in)
-        if new < old:
-            head = f"extend ({old - new}f)"
-        elif new > old:
-            head = f"trim ({new - old}f)"
-    if old_out and new_out:
-        old = tc_to_frames(old_out)
-        new = tc_to_frames(new_out)
-        if new > old:
-            tail = f"extend ({new - old}f)"
-        elif new < old:
-            tail = f"trim ({old - new}f)"
-    return head, tail
+    events_old = parse_edl(edl_old_lines)
+    events_new = parse_edl(edl_new_lines)
 
-st.title("EDL Changelog Generator")
+    old_index = {(e["clip_name"], e["tape_name"]): e for e in events_old}
+    new_index = {(e["clip_name"], e["tape_name"]): e for e in events_new}
 
-edl1_file = st.file_uploader("Upload EDL 1 (old version)", type=["edl"])
-edl2_file = st.file_uploader("Upload EDL 2 (new version)", type=["edl"])
+    results = []
 
-if edl1_file and edl2_file:
-    edl1_lines = edl1_file.read().decode("utf-8", errors="ignore").splitlines()
-    edl2_lines = edl2_file.read().decode("utf-8", errors="ignore").splitlines()
-
-    events1 = parse_edl(edl1_lines)
-    events2 = parse_edl(edl2_lines)
-
-    all_keys = set(events1.keys()) | set(events2.keys())
-    changelog = []
-
-    for rec_in in sorted(all_keys):
-        e1 = events1.get(rec_in)
-        e2 = events2.get(rec_in)
-
-        if e1 and not e2:
-            changelog.append({
-                "Timecode": e1["rec_in"],
-                "Clip Name": e1["from_clip"],
+    for key, old_event in old_index.items():
+        new_event = new_index.get(key)
+        if not new_event:
+            old_duration = tc_to_frames(old_event["src_out"]) - tc_to_frames(old_event["src_in"])
+            results.append({
+                "Clip Name": old_event["clip_name"],
+                "Tape Name": old_event["tape_name"],
                 "Status": "Removed",
-                "Comment": f"The clip {e1['from_clip']} was removed.",
-                "LOC": ", ".join([l[-12:] if len(l) >= 12 else l for l in e1.get("locs", [])]),
-                "Old Duration": duration_in_frames(e1["src_in"], e1["src_out"]),
-                "Old Source In": e1["src_in"],
-                "Old Source Out": e1["src_out"],
+                "Old Src In": old_event["src_in"],
+                "Old Src Out": old_event["src_out"],
+                "New Src In": "",
+                "New Src Out": "",
                 "HEAD": "",
-                "TAIL": ""
+                "TAIL": "",
+                "LOC": "",
+                "REC IN": old_event["rec_in"],
+                "Old Duration": old_duration,
+                "New Duration": ""
             })
-        elif e2 and not e1:
-            changelog.append({
-                "Timecode": e2["rec_in"],
-                "Clip Name": e2["from_clip"],
-                "Status": "New",
-                "Comment": f"The clip {e2['from_clip']} was added.",
-                "LOC": ", ".join([l[-12:] if len(l) >= 12 else l for l in e2.get("locs", [])]),
-                "New Duration": duration_in_frames(e2["src_in"], e2["src_out"]),
-                "New Source In": e2["src_in"],
-                "New Source Out": e2["src_out"],
-                "HEAD": "",
-                "TAIL": ""
-            })
-        elif e1 and e2:
-            if (e1["from_clip"] != e2["from_clip"] or 
-                e1["src_in"] != e2["src_in"] or 
-                e1["src_out"] != e2["src_out"]):
-                head, tail = head_tail_change(e1["src_in"], e1["src_out"], e2["src_in"], e2["src_out"])
-                changelog.append({
-                    "Timecode": e1["rec_in"],
-                    "Clip Name": e1["from_clip"],
-                    "Status": "Changed",
-                    "Comment": f"The clip {e1['from_clip']} was modified. The source timecode changed.",
-                    "LOC": ", ".join([l[-12:] if len(l) >= 12 else l for l in e2.get("locs", [])]),
-                    "Old Duration": duration_in_frames(e1["src_in"], e1["src_out"]),
-                    "New Duration": duration_in_frames(e2["src_in"], e2["src_out"]),
-                    "Old Source In": e1["src_in"],
-                    "Old Source Out": e1["src_out"],
-                    "New Source In": e2["src_in"],
-                    "New Source Out": e2["src_out"],
+        else:
+            head = ""
+            tail = ""
+            if old_event["src_in"] != new_event["src_in"]:
+                diff = tc_to_frames(new_event["src_in"]) - tc_to_frames(old_event["src_in"])
+                head = ("extend" if diff < 0 else "trim") + f" ({abs(diff)}f)"
+            if old_event["src_out"] != new_event["src_out"]:
+                diff = tc_to_frames(new_event["src_out"]) - tc_to_frames(old_event["src_out"])
+                tail = ("extend" if diff > 0 else "trim") + f" ({abs(diff)}f)"
+            if head or tail:
+                old_duration = tc_to_frames(old_event["src_out"]) - tc_to_frames(old_event["src_in"])
+                new_duration = tc_to_frames(new_event["src_out"]) - tc_to_frames(new_event["src_in"])
+                results.append({
+                    "Clip Name": old_event["clip_name"],
+                    "Tape Name": old_event["tape_name"],
+                    "Status": "Modified",
+                    "Old Src In": old_event["src_in"],
+                    "Old Src Out": old_event["src_out"],
+                    "New Src In": new_event["src_in"],
+                    "New Src Out": new_event["src_out"],
                     "HEAD": head,
-                    "TAIL": tail
+                    "TAIL": tail,
+                    "LOC": ", ".join([l[-12:] if len(l) >= 12 else l for l in new_event.get("locs", [])]),
+                    "REC IN": new_event["rec_in"],
+                    "Old Duration": old_duration,
+                    "New Duration": new_duration
                 })
 
-    df = pd.DataFrame(changelog)
+    for key, new_event in new_index.items():
+        if key not in old_index:
+            new_duration = tc_to_frames(new_event["src_out"]) - tc_to_frames(new_event["src_in"])
+            results.append({
+                "Clip Name": new_event["clip_name"],
+                "Tape Name": new_event["tape_name"],
+                "Status": "New",
+                "Old Src In": "",
+                "Old Src Out": "",
+                "New Src In": new_event["src_in"],
+                "New Src Out": new_event["src_out"],
+                "HEAD": "",
+                "TAIL": "",
+                "LOC": ", ".join([l[-12:] if len(l) >= 12 else l for l in new_event.get("locs", [])]),
+                "REC IN": new_event["rec_in"],
+                "Old Duration": "",
+                "New Duration": new_duration
+            })
 
-    # Neue Spaltenreihenfolge definieren
-    preferred_order = [
-        "Timecode", "LOC", "Status", "HEAD", "TAIL",
-        "Old Duration", "New Duration"
-    ]
-    # Alle anderen Spalten, die nicht in preferred_order sind
-    remaining_cols = [col for col in df.columns if col not in preferred_order]
-    df = df[[*preferred_order, *remaining_cols]]
-    df = df.rename(columns={"Timecode": "TC REC"})
+    df = pd.DataFrame(results)
+    df = df.sort_values(by="REC IN")
+    # Reorder duration before HEAD
+    columns = df.columns.tolist()
+    for col in ["Old Duration", "New Duration"]:
+        columns.remove(col)
+    head_index = columns.index("HEAD")
+    columns.insert(head_index, "New Duration")
+    columns.insert(head_index, "Old Duration")
+    df = df[columns]
 
-    st.write("### Changelog")
-    st.dataframe(df)
+    st.write("### ✨ Comparison Result")
+    st.dataframe(df, use_container_width=True)
 
     csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("Download CSV", csv, "changelog.csv", "text/csv")
+    st.download_button("📥 Download CSV", csv, "edl_src_changes.csv", "text/csv")
