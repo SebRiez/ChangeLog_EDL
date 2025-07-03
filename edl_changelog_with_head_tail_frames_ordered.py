@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 import re
 
-st.title("🎬 EDL Comparison – Source IN/OUT + LOC + Duration")
+st.title("🎬 EDL Comparison for changelog 🎬")
 
 fps = st.selectbox("📽️ Frame Rate", [24, 25, 30], index=1)
 
