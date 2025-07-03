@@ -68,10 +68,10 @@ def head_tail_change(old_in, old_out, new_in, new_out):
             tail = f"trim ({old - new}f)"
     return head, tail
 
-st.title("EDL Changelog Generator mit HEAD/TAIL")
+st.title("EDL Changelog Generator")
 
-edl1_file = st.file_uploader("Upload EDL 1 (ältere Version)", type=["edl"])
-edl2_file = st.file_uploader("Upload EDL 2 (neuere Version)", type=["edl"])
+edl1_file = st.file_uploader("Upload EDL 1 (old version)", type=["edl"])
+edl2_file = st.file_uploader("Upload EDL 2 (new version)", type=["edl"])
 
 if edl1_file and edl2_file:
     edl1_lines = edl1_file.read().decode("utf-8", errors="ignore").splitlines()
@@ -146,7 +146,7 @@ if edl1_file and edl2_file:
     df = df[[*preferred_order, *remaining_cols]]
     df = df.rename(columns={"Timecode": "TC REC"})
 
-    st.write("### Changelog mit HEAD/TAIL")
+    st.write("### Changelog")
     st.dataframe(df)
 
     csv = df.to_csv(index=False).encode("utf-8")
